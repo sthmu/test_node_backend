@@ -68,7 +68,7 @@ class PowerMonitorService {
         try {
             const query = `SELECT time, voltage, current, power 
                           FROM power_usage 
-                          WHERE time > now() - ${timeRange}
+                          WHERE time >= now() - INTERVAL '${timeRange}'
                           ORDER BY time DESC`;
 
             const result = await influxClient.query(query, database);
@@ -90,9 +90,9 @@ class PowerMonitorService {
      */
     async getTotalEnergyConsumption(timeRange: string = '24h'): Promise<number> {
         try {
-            const query = `SELECT MEAN(power) as avg_power 
+            const query = `SELECT AVG(power) as avg_power 
                           FROM power_usage 
-                          WHERE time > now() - ${timeRange}`;
+                          WHERE time >= now() - INTERVAL '${timeRange}'`;
 
             const result = await influxClient.query(query, database);
             

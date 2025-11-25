@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" ",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test-data": "ts-node src/test-data.ts"
   },
   "keywords": [],
   "author": "",

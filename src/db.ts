@@ -5,7 +5,9 @@ dotenv.config();
 
 const token = process.env.INFLUXDB_TOKEN;
 const host = process.env.INFLUXDB_HOST || 'https://us-east-1-1.aws.cloud2.influxdata.com';
-const database = process.env.INFLUXDB_DATABASE || 'your-bucket-name';
+const database = process.env.INFLUXDB_DATABASE;
+
+console.log('Using InfluxDB Database:', database);
 
 if (!token) {
     throw new Error('INFLUXDB_TOKEN is not set in .env file');
