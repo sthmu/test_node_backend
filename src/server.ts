@@ -9,10 +9,26 @@ app.use(cors());
 app.use(express.json());
 
 // Simple in-memory store for test calls
-const testCalls: { ip: string; time: string }[] = [];
+const testCalls: { ip: string; time: string; data?: string }[] = [];
 
 app.get('/', (req: Request, res: Response) => {
     res.send('Hello, World!');
+});
+
+// POST endpoint: store custom data with IP and time
+app.post('/api/test', (req: Request, res: Response) => {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const time = new Date().toISOString();
+    const { data } = req.body;
+
+    const entry = { ip, time, data: data || undefined };
+    testCalls.push(entry);
+
+    res.json({
+        message: 'Test data stored',
+        ...entry,
+        totalCalls: testCalls.length
+    });
 });
 
 // Test endpoint: record caller IP and time
@@ -45,19 +61,20 @@ app.get('/api/test/last', (req: Request, res: Response) => {
 // POST endpoint to send power data to InfluxDB
 app.post('/api/power', async (req: Request, res: Response) => {
     try {
-        const { voltage, current, timestamp } = req.body;
+        const { voltage, charge, timestamp } = req.body;
 
-        if (typeof voltage !== 'number' || typeof current !== 'number') {
+        if (typeof voltage !== 'number' || typeof charge !== 'number') {
             return res.status(400).json({ 
-                error: 'Missing or invalid fields: voltage (number) and current (number) are required' 
+                error: 'Missing or invalid fields: voltage (number) and charge (number) are required' 
             });
         }
 
-        await powerMonitorService.sendPowerData({ voltage, current, timestamp });
+        await powerMonitorService.sendPowerData({ voltage, charge, timestamp });
 
+        const energyWh = (voltage * charge) / 3600;
         res.status(201).json({ 
-            message: 'Power data stored successfully',
-            data: { voltage, current, power: voltage * current }
+            message: 'Energy data stored successfully',
+            data: { voltage, charge, energy_wh: energyWh }
         });
     } catch (error) {
         console.error('Error storing power data:', error);
@@ -78,19 +95,19 @@ app.post('/api/power/batch', async (req: Request, res: Response) => {
 
         // Basic validation of each reading
         const sanitized = readings.filter((r: any) => 
-            r && typeof r.voltage === 'number' && typeof r.current === 'number'
+            r && typeof r.voltage === 'number' && typeof r.charge === 'number'
         );
 
         if (sanitized.length === 0) {
             return res.status(400).json({ 
-                error: 'No valid readings provided (voltage/current must be numbers)' 
+                error: 'No valid readings provided (voltage/charge must be numbers)' 
             });
         }
 
         await powerMonitorService.sendBatchPowerData(sanitized);
 
         res.status(201).json({ 
-            message: `${sanitized.length} power readings stored successfully`
+            message: `${sanitized.length} energy readings stored successfully`
         });
     } catch (error) {
         console.error('Error storing batch power data:', error);
