@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.text({ type: '*/*' }));
 
 // Simple in-memory store for test calls
 const testCalls: { ip: string; time: string; data?: string }[] = [];
@@ -19,7 +20,14 @@ app.get('/', (req: Request, res: Response) => {
 app.post('/api/test', (req: Request, res: Response) => {
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
     const time = new Date().toISOString();
-    const { data } = req.body;
+
+    let data;
+    try {
+        const parsed = JSON.parse(req.body);
+        data = parsed.data;
+    } catch {
+        data = req.body;
+    }
 
     const entry = { ip, time, data: data || undefined };
     testCalls.push(entry);
@@ -61,7 +69,14 @@ app.get('/api/test/last', (req: Request, res: Response) => {
 // POST endpoint to send power data to InfluxDB
 app.post('/api/power', async (req: Request, res: Response) => {
     try {
-        const { voltage, charge, timestamp } = req.body;
+        let body;
+        try {
+            body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        } catch {
+            return res.status(400).json({ error: 'Invalid JSON format' });
+        }
+
+        const { voltage, charge, timestamp } = body;
 
         if (typeof voltage !== 'number' || typeof charge !== 'number') {
             return res.status(400).json({ 
@@ -85,7 +100,14 @@ app.post('/api/power', async (req: Request, res: Response) => {
 // POST endpoint to send multiple power readings
 app.post('/api/power/batch', async (req: Request, res: Response) => {
     try {
-        const { readings } = req.body;
+        let body;
+        try {
+            body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        } catch {
+            return res.status(400).json({ error: 'Invalid JSON format' });
+        }
+
+        const { readings } = body;
 
         if (!readings || !Array.isArray(readings)) {
             return res.status(400).json({ 
