@@ -12,6 +12,26 @@ app.use(express.text({ type: '*/*' }));
 // Simple in-memory store for test calls
 const testCalls: { ip: string; time: string; data?: string }[] = [];
 
+// In-memory store for API call logs
+const apiLogs: { endpoint: string; method: string; ip: string; time: string }[] = [];
+
+// Middleware to log all API calls
+app.use((req: Request, res: Response, next) => {
+    // Skip logging for the debug endpoint itself to avoid recursion
+    if (req.path !== '/api/debug/logs') {
+        const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+        const time = new Date().toISOString();
+        
+        apiLogs.push({
+            endpoint: req.path,
+            method: req.method,
+            ip,
+            time
+        });
+    }
+    next();
+});
+
 app.get('/', (req: Request, res: Response) => {
     res.send('Hello, World!');
 });
@@ -64,6 +84,19 @@ app.get('/api/test/last', (req: Request, res: Response) => {
 
     const last = testCalls[testCalls.length - 1];
     res.status(200).json(last);
+});
+
+// Debug endpoint: get all API call logs
+app.get('/api/debug/logs', (req: Request, res: Response) => {
+    const limit = parseInt(req.query.limit as string) || apiLogs.length;
+    
+    // Return most recent logs first (reverse chronological order)
+    const recentLogs = apiLogs.slice(-limit).reverse();
+    
+    res.json({
+        totalCalls: apiLogs.length,
+        logs: recentLogs
+    });
 });
 
 // POST endpoint to send power data to InfluxDB
@@ -212,6 +245,110 @@ app.get('/api/power/range', async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Error retrieving power data range:', error);
         res.status(500).json({ error: 'Failed to retrieve power data range' });
+    }
+});
+
+// GET endpoint for latest reading
+app.get('/api/power/latest', async (req: Request, res: Response) => {
+    try {
+        const data = await powerMonitorService.getPowerUsage('1h');
+        
+        if (data.length === 0) {
+            return res.status(200).json({
+                message: 'No readings available yet'
+            });
+        }
+
+        // Return the most recent reading
+        res.status(200).json(data[0]);
+    } catch (error) {
+        console.error('Error retrieving latest reading:', error);
+        res.status(500).json({ error: 'Failed to retrieve latest reading' });
+    }
+});
+
+// GET endpoint for statistics summary
+app.get('/api/power/stats', async (req: Request, res: Response) => {
+    try {
+        const timeRange = (req.query.timeRange as string) || '24h';
+        const data = await powerMonitorService.getPowerUsage(timeRange);
+
+        if (data.length === 0) {
+            return res.status(200).json({
+                timeRange,
+                message: 'No data available for this time range'
+            });
+        }
+
+        // Calculate statistics
+        const voltages = data.map((r: any) => r.voltage).filter((v: number) => v != null);
+        const charges = data.map((r: any) => r.charge).filter((c: number) => c != null);
+        const energies = data.map((r: any) => r.energy_wh).filter((e: number) => e != null);
+
+        const stats = {
+            timeRange,
+            readingsCount: data.length,
+            voltage: {
+                avg: voltages.reduce((a: number, b: number) => a + b, 0) / voltages.length || 0,
+                min: Math.min(...voltages) || 0,
+                max: Math.max(...voltages) || 0
+            },
+            charge: {
+                avg: charges.reduce((a: number, b: number) => a + b, 0) / charges.length || 0,
+                min: Math.min(...charges) || 0,
+                max: Math.max(...charges) || 0,
+                total: charges.reduce((a: number, b: number) => a + b, 0) || 0
+            },
+            energy: {
+                totalWh: energies.reduce((a: number, b: number) => a + b, 0) || 0,
+                totalKWh: (energies.reduce((a: number, b: number) => a + b, 0) || 0) / 1000,
+                avgPerReading: energies.reduce((a: number, b: number) => a + b, 0) / energies.length || 0
+            }
+        };
+
+        res.status(200).json(stats);
+    } catch (error) {
+        console.error('Error calculating statistics:', error);
+        res.status(500).json({ error: 'Failed to calculate statistics' });
+    }
+});
+
+// GET endpoint for energy consumed in a custom date range
+app.get('/api/power/energy/range', async (req: Request, res: Response) => {
+    try {
+        const from = req.query.from as string | undefined;
+        const to = req.query.to as string | undefined;
+
+        if (!from || !to) {
+            return res.status(400).json({
+                error: "Missing required query params: 'from' and 'to' (ISO datetime strings)"
+            });
+        }
+
+        const data = await powerMonitorService.getPowerUsageRange(from, to);
+
+        if (data.length === 0) {
+            return res.status(200).json({
+                from,
+                to,
+                totalEnergyKWh: 0,
+                readingsCount: 0
+            });
+        }
+
+        // Sum all energy readings
+        const totalWh = data.reduce((sum: number, r: any) => sum + (r.energy_wh || 0), 0);
+
+        res.status(200).json({
+            from,
+            to,
+            totalEnergyKWh: totalWh / 1000,
+            totalEnergyWh: totalWh,
+            readingsCount: data.length
+        });
+    } catch (error) {
+        console.error('Error calculating energy for range:', error);
+        res.status(500).json({ error: 'Failed to calculate energy consumption' });
     }
 });
 
