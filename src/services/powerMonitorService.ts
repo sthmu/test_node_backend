@@ -99,8 +99,8 @@ class PowerMonitorService {
         try {
             const query = `SELECT time, voltage, charge, energy_wh
                            FROM power_usage
-                           WHERE time >= TIMESTAMP '${fromIso}'
-                             AND time <= TIMESTAMP '${toIso}'
+                           WHERE time >= '${fromIso}'
+                             AND time <= '${toIso}'
                            ORDER BY time ASC`;
 
             const result = await influxClient.query(query, database);
