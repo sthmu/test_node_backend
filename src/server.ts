@@ -9,93 +9,67 @@ app.use(cors());
 app.use(express.json());
 app.use(express.text({ type: '*/*' }));
 
-// Simple in-memory store for test calls
-const testCalls: { ip: string; time: string; data?: string }[] = [];
-
-// In-memory store for API call logs
-const apiLogs: { endpoint: string; method: string; ip: string; time: string }[] = [];
-
-// Middleware to log all API calls
-app.use((req: Request, res: Response, next) => {
-    // Skip logging for the debug endpoint itself to avoid recursion
-    if (req.path !== '/api/debug/logs') {
-        const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-        const time = new Date().toISOString();
-        
-        apiLogs.push({
-            endpoint: req.path,
-            method: req.method,
-            ip,
-            time
-        });
-    }
-    next();
-});
+// In-memory store for GSM testing logs (last 100 entries)
+const gsmLogs: { receivedAt: string; ip: string; data: any }[] = [];
 
 app.get('/', (req: Request, res: Response) => {
-    res.send('Hello, World!');
+    res.json({
+        status: 'online',
+        message: 'Energy Monitoring API',
+        endpoints: {
+            gsmTest: 'POST /api/gsm-test',
+            gsmLogs: 'GET /api/gsm-logs',
+            power: 'POST /api/power',
+            stats: 'GET /api/power/stats?timeRange=24h',
+            latest: 'GET /api/power/latest',
+            energyRange: 'GET /api/power/energy/range?from=...&to=...'
+        }
+    });
 });
 
-// POST endpoint: store custom data with IP and time
-app.post('/api/test', (req: Request, res: Response) => {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-    const time = new Date().toISOString();
-
-    let data;
+/**
+ * GSM Testing Endpoint - Simple endpoint to test GSM module connectivity
+ * Accepts any format (JSON, text, form data) and logs everything
+ */
+app.post('/api/gsm-test', (req: Request, res: Response) => {
     try {
-        const parsed = JSON.parse(req.body);
-        data = parsed.data;
-    } catch {
-        data = req.body;
-    }
+        const entry = {
+            receivedAt: new Date().toISOString(),
+            ip: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown',
+            data: req.body
+        };
 
-    const entry = { ip, time, data: data || undefined };
-    testCalls.push(entry);
+        // Add to logs and keep only last 100 entries
+        gsmLogs.push(entry);
+        if (gsmLogs.length > 100) {
+            gsmLogs.shift();
+        }
 
-    res.json({
-        message: 'Test data stored',
-        ...entry,
-        totalCalls: testCalls.length
-    });
-});
+        console.log('GSM TEST RECEIVED:', entry);
 
-// Test endpoint: record caller IP and time
-app.get('/api/test', (req: Request, res: Response) => {
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-    const time = new Date().toISOString();
-
-    testCalls.push({ ip, time });
-
-    res.json({
-        message: 'Test endpoint called',
-        ip,
-        time,
-        totalCalls: testCalls.length
-    });
-});
-
-// Get last test call info
-app.get('/api/test/last', (req: Request, res: Response) => {
-    if (testCalls.length === 0) {
-        return res.status(200).json({
-            message: 'Test endpoint has not been called yet'
+        // SUCCESS RESPONSE for Arduino to verify
+        res.status(200).json({
+            status: 'SUCCESS',
+            serverTime: entry.receivedAt,
+            totalLogs: gsmLogs.length,
+            receivedData: req.body
+        });
+    } catch (error) {
+        console.error('GSM test error:', error);
+        res.status(500).json({
+            status: 'ERROR',
+            message: 'Server error'
         });
     }
-
-    const last = testCalls[testCalls.length - 1];
-    res.status(200).json(last);
 });
 
-// Debug endpoint: get all API call logs
-app.get('/api/debug/logs', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || apiLogs.length;
-    
-    // Return most recent logs first (reverse chronological order)
-    const recentLogs = apiLogs.slice(-limit).reverse();
-    
+/**
+ * View all GSM test logs
+ */
+app.get('/api/gsm-logs', (req: Request, res: Response) => {
     res.json({
-        totalCalls: apiLogs.length,
-        logs: recentLogs
+        totalLogs: gsmLogs.length,
+        logs: gsmLogs
     });
 });
 
