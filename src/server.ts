@@ -20,9 +20,21 @@ app.get('/', (req: Request, res: Response) => {
             gsmTest: 'POST /api/gsm-test',
             gsmLogs: 'GET /api/gsm-logs',
             power: 'POST /api/power',
-            stats: 'GET /api/power/stats?timeRange=24h',
-            latest: 'GET /api/power/latest',
-            energyRange: 'GET /api/power/energy/range?from=...&to=...'
+            powerBatch: 'POST /api/power/batch',
+            powerUsage: 'GET /api/power?timeRange=24h',
+            powerStats: 'GET /api/power/stats?timeRange=24h',
+            powerLatest: 'GET /api/power/latest',
+            powerEnergy: 'GET /api/power/energy?timeRange=24h',
+            powerRange: 'GET /api/power/range?from=...&to=...',
+            powerEnergyRange: 'GET /api/power/energy/range?from=...&to=...',
+            voltageCharge: 'GET /api/power/voltage-charge?limit=...',
+            // Dashboard endpoints
+            dashboardReadings: 'GET /api/dashboard/readings?phases=[1,2,3]&deviceId=...',
+            dashboardHourlyUsage: 'GET /api/dashboard/hourly-usage?date=...&phases=[1,2,3]&deviceId=...',
+            dashboardDeviceInfo: 'GET /api/dashboard/device-info?deviceId=...',
+            dashboardUserProfile: 'GET /api/dashboard/user-profile',
+            dashboardCalculateBill: 'POST /api/dashboard/calculate-bill',
+            dashboardAnalytics: 'GET /api/dashboard/analytics?type=...&period=...&phases=[1,2,3]&deviceId=...'
         }
     });
 });
@@ -323,6 +335,316 @@ app.get('/api/power/energy/range', async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Error calculating energy for range:', error);
         res.status(500).json({ error: 'Failed to calculate energy consumption' });
+    }
+});
+
+// GET endpoint to retrieve all voltage and charge readings with timestamps
+app.get('/api/power/voltage-charge', async (req: Request, res: Response) => {
+    try {
+        const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+        
+        if (limit && (isNaN(limit) || limit <= 0)) {
+            return res.status(400).json({ 
+                error: 'Invalid limit parameter. Must be a positive number.' 
+            });
+        }
+
+        const data = await powerMonitorService.getAllVoltageAndCharge(limit);
+
+        res.status(200).json({ 
+            count: data.length,
+            data 
+        });
+    } catch (error) {
+        console.error('Error retrieving voltage and charge data:', error);
+        res.status(500).json({ error: 'Failed to retrieve voltage and charge data' });
+    }
+});
+
+// ===== DASHBOARD ENDPOINTS =====
+
+// GET Real-Time Energy Readings
+app.get('/api/dashboard/readings', async (req: Request, res: Response) => {
+    try {
+        const { phases, deviceId } = req.query;
+
+        // For now, return mock data based on existing power data
+        const latestData = await powerMonitorService.getPowerUsage('1h');
+
+        if (latestData.length === 0) {
+            return res.status(200).json({
+                success: false,
+                error: {
+                    code: 'NO_DATA',
+                    message: 'No recent readings available'
+                }
+            });
+        }
+
+        // Use the most recent reading as base
+        const recentReading = latestData[0];
+
+        // Mock multi-phase data based on single reading
+        const mockPhases: any = {};
+        const requestedPhases = phases ? JSON.parse(phases as string) : [1, 2, 3];
+
+        requestedPhases.forEach((phase: number) => {
+            // Add some variation for different phases
+            const variation = (phase - 2) * 2; // Phase 1: -2, Phase 2: 0, Phase 3: +2
+            mockPhases[phase] = {
+                voltage: recentReading.voltage + variation,
+                charge: recentReading.charge + (variation * 0.1),
+                energy_wh: recentReading.energy_wh * (1 + variation * 0.01)
+            };
+        });
+
+        const totalEnergy = Object.values(mockPhases).reduce((sum: number, phase: any) => sum + phase.energy_wh, 0);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                timestamp: new Date().toISOString(),
+                phases: mockPhases,
+                total: {
+                    energy_wh: totalEnergy
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error getting dashboard readings:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve readings'
+            }
+        });
+    }
+});
+
+// GET Hourly Energy Usage by Phase
+app.get('/api/dashboard/hourly-usage', async (req: Request, res: Response) => {
+    try {
+        const { date, phases, deviceId } = req.query;
+
+        // Get data for the last 24 hours
+        const data = await powerMonitorService.getPowerUsage('24h');
+
+        // Group by hour and create mock phase data
+        const hourlyData: any[] = [];
+        const hours = Array.from({ length: 24 }, (_, i) => {
+            const hour = i.toString().padStart(2, '0') + ':00';
+            const hourData: any = {
+                hour,
+                phase1: Math.random() * 5 + 1, // Mock data
+                phase2: Math.random() * 5 + 1,
+                phase3: Math.random() * 5 + 1
+            };
+            hourData.total = hourData.phase1 + hourData.phase2 + hourData.phase3;
+            return hourData;
+        });
+
+        res.status(200).json({
+            success: true,
+            data: hours
+        });
+    } catch (error) {
+        console.error('Error getting hourly usage:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve hourly usage'
+            }
+        });
+    }
+});
+
+// GET Device Information
+app.get('/api/dashboard/device-info', async (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.query;
+
+        // Mock device info - in real implementation, this would come from database
+        const deviceInfo = {
+            name: 'University of Kelaniya - A7 Building',
+            location: 'A7 Building, University of Kelaniya',
+            deviceId: deviceId || 'ESP32-A1B2C3',
+            status: 'Online',
+            lastUpdate: new Date().toISOString(),
+            phases: [
+                {
+                    id: 1,
+                    status: 'Active',
+                    currentVoltage: 230.5
+                },
+                {
+                    id: 2,
+                    status: 'Active',
+                    currentVoltage: 228.3
+                },
+                {
+                    id: 3,
+                    status: 'Active',
+                    currentVoltage: 231.2
+                }
+            ]
+        };
+
+        res.status(200).json({
+            success: true,
+            data: deviceInfo
+        });
+    } catch (error) {
+        console.error('Error getting device info:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve device information'
+            }
+        });
+    }
+});
+
+// GET User Profile
+app.get('/api/dashboard/user-profile', async (req: Request, res: Response) => {
+    try {
+        // Mock user profile - in real implementation, this would use authentication
+        const userProfile = {
+            name: 'Nuwan Perera',
+            email: 'nuwan.perera@kln.ac.lk',
+            role: 'Admin',
+            avatar: 'NP'
+        };
+
+        res.status(200).json({
+            success: true,
+            data: userProfile
+        });
+    } catch (error) {
+        console.error('Error getting user profile:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve user profile'
+            }
+        });
+    }
+});
+
+// POST Calculate Electricity Bill (Sri Lankan rates)
+app.post('/api/dashboard/calculate-bill', async (req: Request, res: Response) => {
+    try {
+        const { totalEnergy, deviceId } = req.body;
+
+        if (!totalEnergy || typeof totalEnergy !== 'number') {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    code: 'INVALID_INPUT',
+                    message: 'totalEnergy is required and must be a number'
+                }
+            });
+        }
+
+        // Convert Wh to kWh
+        const energyKWh = totalEnergy / 1000;
+
+        // Sri Lankan electricity tariff slabs (as of 2024)
+        const slabs = [
+            { name: 'Slab A', limit: 30, rate: 8.00 },
+            { name: 'Slab B', limit: 30, rate: 15.00 },
+            { name: 'Slab C', limit: 30, rate: 20.00 },
+            { name: 'Slab D', limit: 30, rate: 30.00 },
+            { name: 'Slab E', limit: Infinity, rate: 50.00 }
+        ];
+
+        let remainingEnergy = energyKWh;
+        let totalCharge = 0;
+        const breakdown = [];
+        let highestSlab = 'Slab A';
+
+        for (const slab of slabs) {
+            if (remainingEnergy <= 0) break;
+
+            const unitsInSlab = Math.min(remainingEnergy, slab.limit);
+            const charge = unitsInSlab * slab.rate;
+            totalCharge += charge;
+
+            breakdown.push({
+                slab: slab.name,
+                units: unitsInSlab,
+                rate: slab.rate,
+                charge: Math.round(charge * 100) / 100
+            });
+
+            remainingEnergy -= unitsInSlab;
+            highestSlab = slab.name;
+        }
+
+        const fixedCharge = 1000.00; // Monthly fixed charge
+        const totalBill = totalCharge + fixedCharge;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                energyCharge: Math.round(totalCharge * 100) / 100,
+                fixedCharge: fixedCharge,
+                discount: 0,
+                penalty: 0,
+                totalBill: Math.round(totalBill * 100) / 100,
+                highestSlab: highestSlab,
+                breakdown: breakdown
+            }
+        });
+    } catch (error) {
+        console.error('Error calculating bill:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to calculate electricity bill'
+            }
+        });
+    }
+});
+
+// GET Analytics Data
+app.get('/api/dashboard/analytics', async (req: Request, res: Response) => {
+    try {
+        const { type, period, phases, deviceId } = req.query;
+
+        // Get data based on period
+        const timeRange = period === '7d' ? '168h' : period === '30d' ? '720h' : '24h';
+        const data = await powerMonitorService.getPowerUsage(timeRange);
+
+        // Create mock analytics data
+        const chartData = data.slice(0, 24).map((reading, index) => ({
+            time: new Date(reading.time).toISOString().slice(11, 16), // HH:MM format
+            energy: reading.energy_wh,
+            voltage: reading.voltage,
+            charge: reading.charge
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: {
+                type: type || 'energy-trend',
+                period: period || '24h',
+                chartData: chartData
+            }
+        });
+    } catch (error) {
+        console.error('Error getting analytics:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve analytics data'
+            }
+        });
     }
 });
 

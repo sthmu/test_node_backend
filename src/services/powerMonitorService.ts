@@ -141,6 +141,38 @@ class PowerMonitorService {
         }
     }
 
+    /**
+     * Get all voltage and charge readings with timestamps
+     * Returns data ordered by time descending (most recent first)
+     */
+    async getAllVoltageAndCharge(limit?: number): Promise<any[]> {
+        try {
+            let query = `SELECT time, voltage, charge 
+                        FROM power_usage 
+                        ORDER BY time DESC`;
+            
+            if (limit) {
+                query += ` LIMIT ${limit}`;
+            }
+
+            const result = await influxClient.query(query, database);
+            const data = [];
+            
+            for await (const row of result) {
+                data.push({
+                    time: row.time,
+                    voltage: row.voltage,
+                    charge: row.charge
+                });
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('Error querying all voltage and charge data:', error);
+            throw error;
+        }
+    }
+
 }
 
 export default new PowerMonitorService();
