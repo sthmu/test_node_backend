@@ -5,3 +5,4 @@ dist/
 *.log
 .github/
 src/dummy-sender.ts
+temp/

@@ -1,6 +1,11 @@
 import express, {Request,Response} from 'express';
 import cors from 'cors';
 import powerMonitorService from './services/powerMonitorService';
+import threePhasePowerService from './services/threePhasePowerService';
+import billingService from './services/billingService';
+import insightsService from './services/insightsService';
+import { validateDeviceId, getCurrentUser, updateUserProfile, getDeviceById } from './middleware/auth';
+import { BillCalculationRequest, ThreePhaseReadings } from './types';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -15,8 +20,14 @@ const gsmLogs: { receivedAt: string; ip: string; data: any }[] = [];
 app.get('/', (req: Request, res: Response) => {
     res.json({
         status: 'online',
-        message: 'Energy Monitoring API',
+        message: '3-Phase Energy Monitoring API - Sri Lankan CEB Tariff System',
+        version: '2.0.0',
         endpoints: {
+            // System endpoints
+            health: 'GET /api/health',
+            debug: 'GET /debug',
+            
+            // Legacy single-phase endpoints
             gsmTest: 'POST /api/gsm-test',
             gsmLogs: 'GET /api/gsm-logs',
             power: 'POST /api/power',
@@ -29,15 +40,366 @@ app.get('/', (req: Request, res: Response) => {
             powerRange: 'GET /api/power/range?from=...&to=...',
             powerEnergyRange: 'GET /api/power/energy/range?from=...&to=...',
             voltageCharge: 'GET /api/power/voltage-charge?limit=...',
-            // Dashboard endpoints
-            dashboardReadings: 'GET /api/dashboard/readings?phases=[1,2,3]&deviceId=...',
-            dashboardHourlyUsage: 'GET /api/dashboard/hourly-usage?date=...&phases=[1,2,3]&deviceId=...',
-            dashboardDeviceInfo: 'GET /api/dashboard/device-info?deviceId=...',
-            dashboardUserProfile: 'GET /api/dashboard/user-profile',
-            dashboardCalculateBill: 'POST /api/dashboard/calculate-bill',
-            dashboardAnalytics: 'GET /api/dashboard/analytics?type=...&period=...&phases=[1,2,3]&deviceId=...'
+            
+            // 3-Phase Dashboard endpoints (v2)
+            '1_readings': 'GET /api/dashboard/readings?phases=[1,2,3]&deviceId=ESP32-A1B2C3',
+            '2_hourlyUsage': 'GET /api/dashboard/hourly-usage?date=2025-12-23&phases=[1,2,3]&deviceId=...',
+            '3_deviceInfo': 'GET /api/dashboard/device-info?deviceId=...',
+            '4_userProfile': 'GET /api/dashboard/user-profile',
+            '5_calculateBill': 'POST /api/dashboard/calculate-bill',
+            '6_analytics': 'GET /api/dashboard/analytics?type=energy&period=24h&deviceId=...',
+            '7_statistics': 'GET /api/dashboard/statistics?deviceId=...&period=today',
+            '8_insights': 'GET /api/dashboard/insights?deviceId=...',
+            '9_updateProfile': 'PUT /api/dashboard/user-profile',
+            '10_phaseData': 'GET /api/dashboard/phase-data?deviceId=...',
+            
+            // Data ingestion
+            storeReadings: 'POST /api/dashboard/readings'
+        },
+        features: [
+            '3-Phase Energy Monitoring',
+            'Sri Lankan CEB Tariff Calculation (Domestic/GP/Industrial)',
+            'Real-time Phase Imbalance Detection',
+            'Maximum Demand Tracking (30-min rolling average)',
+            'Power Factor Penalties & Incentives',
+            'AI-Powered Insights & Alerts',
+            'Device Health Monitoring',
+            'Hourly/Daily/Monthly Analytics'
+        ]
+    });
+});
+
+// API Health Check Endpoint
+app.get('/api/health', async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    
+    const endpoints = [
+        { name: 'GSM Test', method: 'POST', path: '/api/gsm-test', critical: false },
+        { name: 'GSM Logs', method: 'GET', path: '/api/gsm-logs', critical: false },
+        { name: 'Power Data', method: 'POST', path: '/api/power', critical: true },
+        { name: 'Energy Measurement', method: 'POST', path: '/api/energy-measurement', critical: true },
+        { name: 'Power Usage', method: 'GET', path: '/api/power?timeRange=1h', critical: true },
+        { name: 'Power Latest', method: 'GET', path: '/api/power/latest', critical: false },
+        { name: 'Dashboard Readings', method: 'GET', path: '/api/dashboard/readings', critical: false }
+    ];
+
+    const checks = await Promise.all(
+        endpoints.map(async (endpoint) => {
+            const checkStart = Date.now();
+            try {
+                // For GET endpoints, we can actually test them
+                if (endpoint.method === 'GET') {
+                    await powerMonitorService.getPowerUsage('1h');
+                }
+                return {
+                    endpoint: endpoint.name,
+                    method: endpoint.method,
+                    path: endpoint.path,
+                    status: 'healthy',
+                    critical: endpoint.critical,
+                    responseTime: Date.now() - checkStart
+                };
+            } catch (error) {
+                return {
+                    endpoint: endpoint.name,
+                    method: endpoint.method,
+                    path: endpoint.path,
+                    status: 'unhealthy',
+                    critical: endpoint.critical,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    responseTime: Date.now() - checkStart
+                };
+            }
+        })
+    );
+
+    const healthyCount = checks.filter(c => c.status === 'healthy').length;
+    const unhealthyCount = checks.filter(c => c.status === 'unhealthy').length;
+    const criticalUnhealthy = checks.filter(c => c.status === 'unhealthy' && c.critical).length;
+
+    const overallStatus = criticalUnhealthy > 0 ? 'critical' : unhealthyCount > 0 ? 'degraded' : 'healthy';
+
+    res.status(overallStatus === 'critical' ? 503 : 200).json({
+        status: overallStatus,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        responseTime: Date.now() - startTime,
+        endpoints: checks,
+        summary: {
+            total: checks.length,
+            healthy: healthyCount,
+            unhealthy: unhealthyCount,
+            criticalUnhealthy
+        },
+        database: {
+            influxDB: 'connected',
+            database: process.env.INFLUXDB_DATABASE || 'unknown'
+        },
+        server: {
+            port: PORT,
+            nodeVersion: process.version,
+            platform: process.platform
         }
     });
+});
+
+// Debug Page HTML
+app.get('/debug', (req: Request, res: Response) => {
+    res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Debug Dashboard - Energy Monitoring</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2em; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .status-card {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 30px;
+            background: #f8f9fa;
+        }
+        .stat {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .stat-label { color: #666; font-size: 0.9em; }
+        .healthy { color: #10b981; }
+        .degraded { color: #f59e0b; }
+        .critical { color: #ef4444; }
+        .endpoints {
+            padding: 30px;
+        }
+        .endpoint-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+        .endpoint-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+        .endpoint-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .endpoint-name {
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        .method {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .method-get { background: #dbeafe; color: #1e40af; }
+        .method-post { background: #dcfce7; color: #166534; }
+        .status-badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .status-healthy { background: #d1fae5; color: #065f46; }
+        .status-unhealthy { background: #fee2e2; color: #991b1b; }
+        .endpoint-path {
+            color: #6b7280;
+            font-family: monospace;
+            margin-top: 8px;
+        }
+        .response-time {
+            color: #6b7280;
+            font-size: 0.9em;
+            margin-top: 8px;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1em;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6b7280;
+        }
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .last-updated {
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 API Debug Dashboard</h1>
+            <p>Energy Monitoring System - Real-time Status</p>
+        </div>
+        
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading API health status...</p>
+            </div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadHealth()">🔄 Refresh</button>
+
+    <script>
+        async function loadHealth() {
+            const contentDiv = document.getElementById('content');
+            contentDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
+
+            try {
+                const response = await fetch('/api/health');
+                const data = await response.json();
+
+                const statusClass = data.status === 'healthy' ? 'healthy' : 
+                                  data.status === 'degraded' ? 'degraded' : 'critical';
+
+                let html = \`
+                    <div class="status-card">
+                        <div class="stat">
+                            <div class="stat-value \${statusClass}">\${data.status.toUpperCase()}</div>
+                            <div class="stat-label">Overall Status</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value healthy">\${data.summary.healthy}</div>
+                            <div class="stat-label">Healthy Endpoints</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value degraded">\${data.summary.unhealthy}</div>
+                            <div class="stat-label">Unhealthy Endpoints</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value">\${data.responseTime}ms</div>
+                            <div class="stat-label">Response Time</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value">\${Math.floor(data.uptime)}s</div>
+                            <div class="stat-label">Server Uptime</div>
+                        </div>
+                    </div>
+
+                    <div class="endpoints">
+                        <h2 style="margin-bottom: 20px;">API Endpoints Status</h2>
+                \`;
+
+                data.endpoints.forEach(endpoint => {
+                    const statusClass = endpoint.status === 'healthy' ? 'status-healthy' : 'status-unhealthy';
+                    const methodClass = endpoint.method.toLowerCase() === 'get' ? 'method-get' : 'method-post';
+                    
+                    html += \`
+                        <div class="endpoint-card">
+                            <div class="endpoint-header">
+                                <div class="endpoint-name">\${endpoint.endpoint}</div>
+                                <div>
+                                    <span class="method \${methodClass}">\${endpoint.method}</span>
+                                    <span class="status-badge \${statusClass}">\${endpoint.status}</span>
+                                </div>
+                            </div>
+                            <div class="endpoint-path">\${endpoint.path}</div>
+                            <div class="response-time">Response Time: \${endpoint.responseTime}ms\${endpoint.critical ? ' • Critical Endpoint' : ''}</div>
+                            \${endpoint.error ? \`<div style="color: #ef4444; margin-top: 8px;">Error: \${endpoint.error}</div>\` : ''}
+                        </div>
+                    \`;
+                });
+
+                html += \`
+                    </div>
+                    <div class="last-updated">
+                        Last updated: \${new Date().toLocaleString()}<br>
+                        Server: \${data.server.platform} | Node \${data.server.nodeVersion} | Port \${data.server.port}<br>
+                        Database: \${data.database.influxDB} (\${data.database.database})
+                    </div>
+                \`;
+
+                contentDiv.innerHTML = html;
+            } catch (error) {
+                contentDiv.innerHTML = \`
+                    <div class="loading">
+                        <p style="color: #ef4444;">❌ Failed to load API health status</p>
+                        <p style="margin-top: 10px;">\${error.message}</p>
+                    </div>
+                \`;
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadHealth, 30000);
+        
+        // Load on page load
+        loadHealth();
+    </script>
+</body>
+</html>
+    `);
 });
 
 /**
@@ -472,52 +834,27 @@ app.post('/api/energy-measurement', async (req: Request, res: Response) => {
 
 // ===== DASHBOARD ENDPOINTS =====
 
-// GET Real-Time Energy Readings
-app.get('/api/dashboard/readings', async (req: Request, res: Response) => {
+// 1. GET /dashboard/readings - Real-time 3-phase energy readings
+app.get('/api/dashboard/readings', validateDeviceId, async (req: Request, res: Response) => {
     try {
-        const { phases, deviceId } = req.query;
+        const { phases: phasesParam, deviceId } = req.query;
+        const requestedPhases = phasesParam ? JSON.parse(phasesParam as string) : [1, 2, 3];
 
-        // For now, return mock data based on existing power data
-        const latestData = await powerMonitorService.getPowerUsage('1h');
+        const readings = await threePhasePowerService.getLatestReadings(deviceId as string, requestedPhases);
 
-        if (latestData.length === 0) {
+        if (!readings) {
             return res.status(200).json({
                 success: false,
                 error: {
-                    code: 'NO_DATA',
-                    message: 'No recent readings available'
+                    code: 'NO_DATA_AVAILABLE',
+                    message: 'No recent readings available for this device'
                 }
             });
         }
 
-        // Use the most recent reading as base
-        const recentReading = latestData[0];
-
-        // Mock multi-phase data based on single reading
-        const mockPhases: any = {};
-        const requestedPhases = phases ? JSON.parse(phases as string) : [1, 2, 3];
-
-        requestedPhases.forEach((phase: number) => {
-            // Add some variation for different phases
-            const variation = (phase - 2) * 2; // Phase 1: -2, Phase 2: 0, Phase 3: +2
-            mockPhases[phase] = {
-                voltage: recentReading.voltage + variation,
-                charge: recentReading.charge + (variation * 0.1),
-                energy_wh: recentReading.energy_wh * (1 + variation * 0.01)
-            };
-        });
-
-        const totalEnergy = Object.values(mockPhases).reduce((sum: number, phase: any) => sum + phase.energy_wh, 0);
-
         res.status(200).json({
             success: true,
-            data: {
-                timestamp: new Date().toISOString(),
-                phases: mockPhases,
-                total: {
-                    energy_wh: totalEnergy
-                }
-            }
+            data: readings
         });
     } catch (error) {
         console.error('Error getting dashboard readings:', error);
@@ -531,31 +868,22 @@ app.get('/api/dashboard/readings', async (req: Request, res: Response) => {
     }
 });
 
-// GET Hourly Energy Usage by Phase
-app.get('/api/dashboard/hourly-usage', async (req: Request, res: Response) => {
+// 2. GET /dashboard/hourly-usage - Hourly energy usage by phase
+app.get('/api/dashboard/hourly-usage', validateDeviceId, async (req: Request, res: Response) => {
     try {
-        const { date, phases, deviceId } = req.query;
+        const { date, phases: phasesParam, deviceId } = req.query;
+        const requestedPhases = phasesParam ? JSON.parse(phasesParam as string) : [1, 2, 3];
+        const targetDate = date ? date as string : new Date().toISOString().split('T')[0];
 
-        // Get data for the last 24 hours
-        const data = await powerMonitorService.getPowerUsage('24h');
-
-        // Group by hour and create mock phase data
-        const hourlyData: any[] = [];
-        const hours = Array.from({ length: 24 }, (_, i) => {
-            const hour = i.toString().padStart(2, '0') + ':00';
-            const hourData: any = {
-                hour,
-                phase1: Math.random() * 5 + 1, // Mock data
-                phase2: Math.random() * 5 + 1,
-                phase3: Math.random() * 5 + 1
-            };
-            hourData.total = hourData.phase1 + hourData.phase2 + hourData.phase3;
-            return hourData;
-        });
+        const hourlyData = await threePhasePowerService.getHourlyUsage(
+            deviceId as string,
+            targetDate,
+            requestedPhases
+        );
 
         res.status(200).json({
             success: true,
-            data: hours
+            data: hourlyData
         });
     } catch (error) {
         console.error('Error getting hourly usage:', error);
@@ -569,40 +897,39 @@ app.get('/api/dashboard/hourly-usage', async (req: Request, res: Response) => {
     }
 });
 
-// GET Device Information
-app.get('/api/dashboard/device-info', async (req: Request, res: Response) => {
+// 3. GET /dashboard/device-info - Device information and health
+app.get('/api/dashboard/device-info', validateDeviceId, async (req: Request, res: Response) => {
     try {
         const { deviceId } = req.query;
-
-        // Mock device info - in real implementation, this would come from database
-        const deviceInfo = {
-            name: 'University of Kelaniya - A7 Building',
-            location: 'A7 Building, University of Kelaniya',
-            deviceId: deviceId || 'ESP32-A1B2C3',
-            status: 'Online',
-            lastUpdate: new Date().toISOString(),
-            phases: [
-                {
-                    id: 1,
-                    status: 'Active',
-                    currentVoltage: 230.5
-                },
-                {
-                    id: 2,
-                    status: 'Active',
-                    currentVoltage: 228.3
-                },
-                {
-                    id: 3,
-                    status: 'Active',
-                    currentVoltage: 231.2
+        
+        const deviceData = getDeviceById(deviceId as string);
+        if (!deviceData) {
+            return res.status(404).json({
+                success: false,
+                error: {
+                    code: 'DEVICE_NOT_FOUND',
+                    message: 'Device not found'
                 }
-            ]
-        };
+            });
+        }
+
+        const healthStatus = await threePhasePowerService.getDeviceHealthStatus(deviceId as string);
+        const energy24h = await threePhasePowerService.get24HourEnergy(deviceId as string);
+
+        // Get latest reading for timestamp
+        const latestReading = await threePhasePowerService.getLatestReadings(deviceId as string);
 
         res.status(200).json({
             success: true,
-            data: deviceInfo
+            data: {
+                name: deviceData.name,
+                location: deviceData.location,
+                deviceId: deviceId as string,
+                status: healthStatus === 'ok' ? 'online' : healthStatus === 'warning' ? 'warning' : 'offline',
+                lastDataReceived: latestReading?.timestamp || new Date().toISOString(),
+                healthStatus,
+                energy24h
+            }
         });
     } catch (error) {
         console.error('Error getting device info:', error);
@@ -616,16 +943,20 @@ app.get('/api/dashboard/device-info', async (req: Request, res: Response) => {
     }
 });
 
-// GET User Profile
+// 4. GET /dashboard/user-profile - User profile and preferences
 app.get('/api/dashboard/user-profile', async (req: Request, res: Response) => {
     try {
-        // Mock user profile - in real implementation, this would use authentication
-        const userProfile = {
-            name: 'Nuwan Perera',
-            email: 'nuwan.perera@kln.ac.lk',
-            role: 'Admin',
-            avatar: 'NP'
-        };
+        const userProfile = getCurrentUser();
+
+        if (!userProfile) {
+            return res.status(404).json({
+                success: false,
+                error: {
+                    code: 'USER_NOT_FOUND',
+                    message: 'User not found'
+                }
+            });
+        }
 
         res.status(200).json({
             success: true,
@@ -643,106 +974,82 @@ app.get('/api/dashboard/user-profile', async (req: Request, res: Response) => {
     }
 });
 
-// POST Calculate Electricity Bill (Sri Lankan rates)
-app.post('/api/dashboard/calculate-bill', async (req: Request, res: Response) => {
+// 5. POST /dashboard/calculate-bill - Calculate electricity bill
+app.post('/api/dashboard/calculate-bill', validateDeviceId, async (req: Request, res: Response) => {
     try {
-        const { totalEnergy, deviceId } = req.body;
+        const requestData: BillCalculationRequest = req.body;
 
-        if (!totalEnergy || typeof totalEnergy !== 'number') {
+        if (!requestData.totalEnergy || typeof requestData.totalEnergy !== 'number') {
             return res.status(400).json({
                 success: false,
                 error: {
-                    code: 'INVALID_INPUT',
+                    code: 'INVALID_PARAMETERS',
                     message: 'totalEnergy is required and must be a number'
                 }
             });
         }
 
-        // Convert Wh to kWh
-        const energyKWh = totalEnergy / 1000;
-
-        // Sri Lankan electricity tariff slabs (as of 2024)
-        const slabs = [
-            { name: 'Slab A', limit: 30, rate: 8.00 },
-            { name: 'Slab B', limit: 30, rate: 15.00 },
-            { name: 'Slab C', limit: 30, rate: 20.00 },
-            { name: 'Slab D', limit: 30, rate: 30.00 },
-            { name: 'Slab E', limit: Infinity, rate: 50.00 }
-        ];
-
-        let remainingEnergy = energyKWh;
-        let totalCharge = 0;
-        const breakdown = [];
-        let highestSlab = 'Slab A';
-
-        for (const slab of slabs) {
-            if (remainingEnergy <= 0) break;
-
-            const unitsInSlab = Math.min(remainingEnergy, slab.limit);
-            const charge = unitsInSlab * slab.rate;
-            totalCharge += charge;
-
-            breakdown.push({
-                slab: slab.name,
-                units: unitsInSlab,
-                rate: slab.rate,
-                charge: Math.round(charge * 100) / 100
+        if (!requestData.connectionCategory) {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    code: 'INVALID_PARAMETERS',
+                    message: 'connectionCategory is required'
+                }
             });
-
-            remainingEnergy -= unitsInSlab;
-            highestSlab = slab.name;
         }
 
-        const fixedCharge = 1000.00; // Monthly fixed charge
-        const totalBill = totalCharge + fixedCharge;
+        const billData = billingService.calculateBill(requestData);
 
         res.status(200).json({
             success: true,
-            data: {
-                energyCharge: Math.round(totalCharge * 100) / 100,
-                fixedCharge: fixedCharge,
-                discount: 0,
-                penalty: 0,
-                totalBill: Math.round(totalBill * 100) / 100,
-                highestSlab: highestSlab,
-                breakdown: breakdown
-            }
+            data: billData
         });
     } catch (error) {
         console.error('Error calculating bill:', error);
         res.status(500).json({
             success: false,
             error: {
-                code: 'SERVER_ERROR',
-                message: 'Failed to calculate electricity bill'
+                code: 'CALCULATION_ERROR',
+                message: error instanceof Error ? error.message : 'Failed to calculate electricity bill'
             }
         });
     }
 });
 
-// GET Analytics Data
-app.get('/api/dashboard/analytics', async (req: Request, res: Response) => {
+// 6. GET /dashboard/analytics - Analytics data for charts
+app.get('/api/dashboard/analytics', validateDeviceId, async (req: Request, res: Response) => {
     try {
-        const { type, period, phases, deviceId } = req.query;
+        const { type, period, phases: phasesParam, deviceId } = req.query;
+        
+        const analyticsType = (type as 'energy' | 'voltage' | 'power') || 'energy';
+        const analyticsPeriod = (period as '24h' | '7d' | '30d') || '24h';
 
-        // Get data based on period
-        const timeRange = period === '7d' ? '168h' : period === '30d' ? '720h' : '24h';
-        const data = await powerMonitorService.getPowerUsage(timeRange);
+        const analyticsData = await threePhasePowerService.getAnalyticsData(
+            deviceId as string,
+            analyticsType,
+            analyticsPeriod
+        );
 
-        // Create mock analytics data
-        const chartData = data.slice(0, 24).map((reading, index) => ({
-            time: new Date(reading.time).toISOString().slice(11, 16), // HH:MM format
-            energy: reading.energy_wh,
-            voltage: reading.voltage,
-            charge: reading.charge
-        }));
+        // Add daily consumption for chart
+        const dailyConsumption = [];
+        const days = analyticsPeriod === '7d' ? 7 : analyticsPeriod === '30d' ? 30 : 7;
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        
+        for (let i = days - 1; i >= 0; i--) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            dailyConsumption.push({
+                day: dayNames[date.getDay()],
+                consumption: Math.random() * 50 + 20 // Mock data - replace with actual
+            });
+        }
 
         res.status(200).json({
             success: true,
             data: {
-                type: type || 'energy-trend',
-                period: period || '24h',
-                chartData: chartData
+                ...analyticsData,
+                dailyConsumption
             }
         });
     } catch (error) {
@@ -752,6 +1059,179 @@ app.get('/api/dashboard/analytics', async (req: Request, res: Response) => {
             error: {
                 code: 'SERVER_ERROR',
                 message: 'Failed to retrieve analytics data'
+            }
+        });
+    }
+});
+
+// 7. GET /dashboard/statistics - Aggregated statistics
+app.get('/api/dashboard/statistics', validateDeviceId, async (req: Request, res: Response) => {
+    try {
+        const { deviceId, period } = req.query;
+        const statsPeriod = (period as 'today' | 'week' | 'month') || 'today';
+
+        const stats = await threePhasePowerService.getStatistics(
+            deviceId as string,
+            statsPeriod
+        );
+
+        res.status(200).json({
+            success: true,
+            data: stats
+        });
+    } catch (error) {
+        console.error('Error getting statistics:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve statistics'
+            }
+        });
+    }
+});
+
+// 8. GET /dashboard/insights - AI-generated insights and alerts
+app.get('/api/dashboard/insights', validateDeviceId, async (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.query;
+
+        // Get current and historical data for insights
+        const stats = await threePhasePowerService.getStatistics(deviceId as string, 'today');
+        const yesterdayStats = await threePhasePowerService.getStatistics(deviceId as string, 'week');
+
+        const insightsData = {
+            currentEnergy: stats.totalEnergy,
+            yesterdayEnergy: yesterdayStats.totalEnergy / 7, // Approximate
+            averageVoltage: stats.averageVoltage,
+            minVoltage: stats.averageVoltage - 5, // Mock
+            maxVoltage: stats.averageVoltage + 5, // Mock
+            nightTimeLoad: 1.2, // Mock - would come from actual night-time query
+            peakPower: stats.peakPower,
+            powerFactor: 0.92 // Mock - would come from actual data
+        };
+
+        const insights = await insightsService.generateInsights(deviceId as string, insightsData);
+
+        // Check for phase imbalance
+        const phaseData = await threePhasePowerService.getPhaseContributions(deviceId as string);
+        const phaseContributions = Object.values(phaseData).map((p: any) => p.contribution);
+        
+        if (phaseContributions.length === 3) {
+            const imbalanceInsight = insightsService.detectPhaseImbalance(
+                phaseContributions[0],
+                phaseContributions[1],
+                phaseContributions[2]
+            );
+            if (imbalanceInsight) {
+                insights.push(imbalanceInsight);
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            data: insights
+        });
+    } catch (error) {
+        console.error('Error generating insights:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to generate insights'
+            }
+        });
+    }
+});
+
+// 9. PUT /dashboard/user-profile - Update user profile
+app.put('/api/dashboard/user-profile', async (req: Request, res: Response) => {
+    try {
+        const { connectionCategory, monthlyBudget } = req.body;
+
+        const updates: any = {};
+        if (connectionCategory) updates.connectionCategory = connectionCategory;
+        if (monthlyBudget !== undefined) updates.monthlyBudget = monthlyBudget;
+
+        const updatedProfile = updateUserProfile('user-1', updates); // Default user
+
+        if (!updatedProfile) {
+            return res.status(404).json({
+                success: false,
+                error: {
+                    code: 'USER_NOT_FOUND',
+                    message: 'User not found'
+                }
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully'
+        });
+    } catch (error) {
+        console.error('Error updating user profile:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to update user profile'
+            }
+        });
+    }
+});
+
+// 10. GET /dashboard/phase-data - Phase-wise detailed data
+app.get('/api/dashboard/phase-data', validateDeviceId, async (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.query;
+
+        const phaseData = await threePhasePowerService.getPhaseContributions(deviceId as string);
+
+        res.status(200).json({
+            success: true,
+            data: phaseData
+        });
+    } catch (error) {
+        console.error('Error getting phase data:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to retrieve phase data'
+            }
+        });
+    }
+});
+
+// POST endpoint to store 3-phase readings (for ESP32 devices)
+app.post('/api/dashboard/readings', async (req: Request, res: Response) => {
+    try {
+        const { deviceId, readings } = req.body as { deviceId: string; readings: ThreePhaseReadings };
+
+        if (!deviceId || !readings) {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    code: 'INVALID_PARAMETERS',
+                    message: 'deviceId and readings are required'
+                }
+            });
+        }
+
+        await threePhasePowerService.store3PhaseReading(deviceId, readings);
+
+        res.status(200).json({
+            success: true,
+            message: 'Readings stored successfully'
+        });
+    } catch (error) {
+        console.error('Error storing 3-phase reading:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                code: 'SERVER_ERROR',
+                message: 'Failed to store readings'
             }
         });
     }

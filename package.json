@@ -9,7 +9,9 @@
     "dev": "ts-node src/server.ts",
     "build": "tsc",
     "test-data": "ts-node src/test-data.ts",
-    "send-dummy": "ts-node src/dummy-sender.ts"
+    "send-dummy": "ts-node src/dummy-sender.ts",
+    "fill-db": "ts-node temp/fill-dummy-data.ts",
+    "test-fill": "ts-node temp/test-connection.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +19,7 @@
   "type": "commonjs",
   "dependencies": {
     "@influxdata/influxdb3-client": "^1.4.0",
+    "axios": "^1.6.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0"
