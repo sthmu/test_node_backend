@@ -21,6 +21,7 @@ app.get('/', (req: Request, res: Response) => {
             gsmLogs: 'GET /api/gsm-logs',
             power: 'POST /api/power',
             powerBatch: 'POST /api/power/batch',
+            energyMeasurement: 'POST /api/energy-measurement',
             powerUsage: 'GET /api/power?timeRange=24h',
             powerStats: 'GET /api/power/stats?timeRange=24h',
             powerLatest: 'GET /api/power/latest',
@@ -358,6 +359,114 @@ app.get('/api/power/voltage-charge', async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Error retrieving voltage and charge data:', error);
         res.status(500).json({ error: 'Failed to retrieve voltage and charge data' });
+    }
+});
+
+// POST endpoint for detailed energy measurements
+app.post('/api/energy-measurement', async (req: Request, res: Response) => {
+    try {
+        let body;
+        try {
+            body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+        } catch {
+            return res.status(400).json({ status: 'ERROR', message: 'Invalid JSON' });
+        }
+
+        const { ts, e_Wh, p_W, v_rms, i_rms, pf, v_min, v_max, p_peak } = body;
+
+        // Generate missing fields where possible
+        const currentTime = Math.floor(Date.now() / 1000); // Current UNIX timestamp
+        const generatedTs = ts || currentTime;
+
+        // Assuming 1-minute measurement intervals for calculations
+        const timeIntervalHours = 1 / 60; // 1 minute = 1/60 hour
+
+        let generatedE_Wh = e_Wh;
+        let generatedP_W = p_W;
+        let generatedV_rms = v_rms;
+        let generatedI_rms = i_rms;
+        let generatedPf = pf;
+        let generatedV_min = v_min;
+        let generatedV_max = v_max;
+        let generatedP_peak = p_peak;
+
+        // Generate power factor if missing (default to 0.95 for typical residential)
+        if (generatedPf === undefined) {
+            generatedPf = 0.95;
+        }
+
+        // Generate RMS voltage if missing (default to 230V for standard mains)
+        if (generatedV_rms === undefined) {
+            generatedV_rms = 230.0;
+        }
+
+        // Generate RMS current if missing but power and voltage are available
+        if (generatedI_rms === undefined && generatedP_W !== undefined && generatedV_rms !== undefined && generatedPf !== undefined) {
+            generatedI_rms = generatedP_W / (generatedV_rms * generatedPf);
+        }
+
+        // Generate average power if missing but current and voltage are available
+        if (generatedP_W === undefined && generatedI_rms !== undefined && generatedV_rms !== undefined && generatedPf !== undefined) {
+            generatedP_W = generatedV_rms * generatedI_rms * generatedPf;
+        }
+
+        // Generate energy if missing but power is available
+        if (generatedE_Wh === undefined && generatedP_W !== undefined) {
+            generatedE_Wh = generatedP_W * timeIntervalHours;
+        }
+
+        // Generate power if missing but energy is available
+        if (generatedP_W === undefined && generatedE_Wh !== undefined) {
+            generatedP_W = generatedE_Wh / timeIntervalHours;
+        }
+
+        // Generate voltage min/max if missing (assume some variation around RMS)
+        if (generatedV_min === undefined && generatedV_rms !== undefined) {
+            generatedV_min = generatedV_rms * 0.95; // 5% below RMS
+        }
+        if (generatedV_max === undefined && generatedV_rms !== undefined) {
+            generatedV_max = generatedV_rms * 1.05; // 5% above RMS
+        }
+
+        // Generate peak power if missing (assume 20% above average power)
+        if (generatedP_peak === undefined && generatedP_W !== undefined) {
+            generatedP_peak = generatedP_W * 1.2;
+        }
+
+        // Validate that we have the essential fields
+        if (generatedE_Wh === undefined || generatedP_W === undefined || generatedV_rms === undefined ||
+            generatedI_rms === undefined || generatedPf === undefined || generatedV_min === undefined ||
+            generatedV_max === undefined || generatedP_peak === undefined) {
+            return res.status(400).json({ status: 'ERROR', message: 'Missing data' });
+        }
+
+        // Validate ranges
+        if (generatedPf < 0 || generatedPf > 1) {
+            return res.status(400).json({ status: 'ERROR', message: 'Invalid power factor' });
+        }
+
+        if (generatedTs <= 0) {
+            return res.status(400).json({ status: 'ERROR', message: 'Invalid timestamp' });
+        }
+
+        const measurement = {
+            ts: generatedTs,
+            e_Wh: generatedE_Wh,
+            p_W: generatedP_W,
+            v_rms: generatedV_rms,
+            i_rms: generatedI_rms,
+            pf: generatedPf,
+            v_min: generatedV_min,
+            v_max: generatedV_max,
+            p_peak: generatedP_peak
+        };
+
+        await powerMonitorService.sendEnergyMeasurement(measurement);
+
+        res.status(200).json({ status: 'OK' });
+    } catch (error) {
+        console.error('Error storing energy measurement:', error);
+        res.status(500).json({ status: 'ERROR', message: 'Server error' });
     }
 });
 
