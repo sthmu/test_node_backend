@@ -738,7 +738,16 @@ app.post('/api/energy-measurement', async (req: Request, res: Response) => {
 
         // Generate missing fields where possible
         const currentTime = Math.floor(Date.now() / 1000); // Current UNIX timestamp
-        const generatedTs = ts || currentTime;
+        
+        // Validate timestamp - must be within last 30 days and not in future
+        const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
+        let generatedTs = ts || currentTime;
+        
+        // If timestamp is too old or in future, use current server time
+        if (generatedTs < thirtyDaysAgo || generatedTs > currentTime + 300) {
+            console.warn(`Invalid timestamp ${generatedTs} (${new Date(generatedTs * 1000).toISOString()}), using server time`);
+            generatedTs = currentTime;
+        }
 
         // Assuming 1-minute measurement intervals for calculations
         const timeIntervalHours = 1 / 60; // 1 minute = 1/60 hour
