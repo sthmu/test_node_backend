@@ -42,7 +42,7 @@ app.get('/', (req: Request, res: Response) => {
             voltageCharge: 'GET /api/power/voltage-charge?limit=...',
             
             // 3-Phase Dashboard endpoints (v2)
-            '1_readings': 'GET /api/dashboard/readings?phases=[1,2,3]&deviceId=ESP32-A1B2C3',
+            '1_readings': 'GET /api/dashboard/readings?phases=[1,2,3]&deviceId=TEST',
             '2_hourlyUsage': 'GET /api/dashboard/hourly-usage?date=2025-12-23&phases=[1,2,3]&deviceId=...',
             '3_deviceInfo': 'GET /api/dashboard/device-info?deviceId=...',
             '4_userProfile': 'GET /api/dashboard/user-profile',

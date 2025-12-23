@@ -63,7 +63,7 @@ const mockUsers: any = {
 };
 
 const mockDevices: any = {
-    'ESP32-A1B2C3': {
+    'TEST': {
         name: 'Main Energy Meter',
         location: 'Building A - Ground Floor',
         userId: 'user-1'
