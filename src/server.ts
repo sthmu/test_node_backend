@@ -725,16 +725,35 @@ app.get('/api/power/voltage-charge', async (req: Request, res: Response) => {
 });
 
 // POST endpoint for detailed energy measurements
+// Accepts both JSON body AND query parameters (for GSM modules)
 app.post('/api/energy-measurement', async (req: Request, res: Response) => {
     try {
-        let body;
-        try {
-            body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-        } catch {
-            return res.status(400).json({ status: 'ERROR', message: 'Invalid JSON' });
+        let data: any = {};
+        
+        // Check if data is in query parameters (simpler for GSM modules)
+        if (Object.keys(req.query).length > 0) {
+            // Convert query params to numbers
+            data = {
+                ts: req.query.ts ? parseFloat(req.query.ts as string) : undefined,
+                e_Wh: req.query.e_Wh ? parseFloat(req.query.e_Wh as string) : undefined,
+                p_W: req.query.p_W ? parseFloat(req.query.p_W as string) : undefined,
+                v_rms: req.query.v_rms ? parseFloat(req.query.v_rms as string) : undefined,
+                i_rms: req.query.i_rms ? parseFloat(req.query.i_rms as string) : undefined,
+                pf: req.query.pf ? parseFloat(req.query.pf as string) : undefined,
+                v_min: req.query.v_min ? parseFloat(req.query.v_min as string) : undefined,
+                v_max: req.query.v_max ? parseFloat(req.query.v_max as string) : undefined,
+                p_peak: req.query.p_peak ? parseFloat(req.query.p_peak as string) : undefined
+            };
+        } else {
+            // Fall back to JSON body
+            try {
+                data = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+            } catch {
+                return res.status(400).json({ status: 'ERROR', message: 'Invalid JSON' });
+            }
         }
 
-        const { ts, e_Wh, p_W, v_rms, i_rms, pf, v_min, v_max, p_peak } = body;
+        const { ts, e_Wh, p_W, v_rms, i_rms, pf, v_min, v_max, p_peak } = data;
 
         // Generate missing fields where possible
         const currentTime = Math.floor(Date.now() / 1000); // Current UNIX timestamp
