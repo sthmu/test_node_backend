@@ -33,7 +33,7 @@ app.get('/', (req: Request, res: Response) => {
             power: 'POST /api/power',
             powerBatch: 'POST /api/power/batch',
             energyMeasurement: 'POST /api/energy-measurement',
-            energyMeasurement3Phase: 'GET /api/energy-measurement-3phase?d=TEST&v1=235.0&c1=0.8&pf1=0.95&v2=226.0&c2=0.8&pf2=0.92&v3=225.0&c3=0.7&pf3=0.98',
+            energyMeasurement3Phase: 'GET/POST /api/energy-measurement-3phase?d=TEST&v1=235.0&c1=0.8&pf1=0.95&v2=226.0&c2=0.8&pf2=0.92&v3=225.0&c3=0.7&pf3=0.98',
             powerStats: 'GET /api/power/stats?timeRange=24h',
             powerLatest: 'GET /api/power/latest',
             powerEnergy: 'GET /api/power/energy?timeRange=24h',
@@ -861,9 +861,10 @@ app.post('/api/energy-measurement', async (req: Request, res: Response) => {
     }
 });
 
-// GET endpoint for 3-phase energy measurements (GSM module compatible)
+// GET/POST endpoint for 3-phase energy measurements (GSM module compatible)
 // Accepts shortened query parameters for reduced URL length
-app.get('/api/energy-measurement-3phase', async (req: Request, res: Response) => {
+// Supports both GET and POST methods for maximum compatibility
+app.all('/api/energy-measurement-3phase', async (req: Request, res: Response) => {
     try {
         // Map shortened parameter names to full names
         const data: any = {
