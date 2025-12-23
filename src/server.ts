@@ -33,8 +33,7 @@ app.get('/', (req: Request, res: Response) => {
             power: 'POST /api/power',
             powerBatch: 'POST /api/power/batch',
             energyMeasurement: 'POST /api/energy-measurement',
-            energyMeasurement3Phase: 'POST /api/energy-measurement-3phase?deviceId=...&p1_voltage=...&p1_current=...&...',
-            powerUsage: 'GET /api/power?timeRange=24h',
+            energyMeasurement3Phase: 'GET /api/energy-measurement-3phase?d=TEST&v1=235.0&c1=0.8&pf1=0.95&v2=226.0&c2=0.8&pf2=0.92&v3=225.0&c3=0.7&pf3=0.98',
             powerStats: 'GET /api/power/stats?timeRange=24h',
             powerLatest: 'GET /api/power/latest',
             powerEnergy: 'GET /api/power/energy?timeRange=24h',
@@ -862,50 +861,38 @@ app.post('/api/energy-measurement', async (req: Request, res: Response) => {
     }
 });
 
-// POST endpoint for 3-phase energy measurements
-// Accepts query parameters (for GSM modules sending 3-phase data)
-app.post('/api/energy-measurement-3phase', async (req: Request, res: Response) => {
+// GET endpoint for 3-phase energy measurements (GSM module compatible)
+// Accepts shortened query parameters for reduced URL length
+app.get('/api/energy-measurement-3phase', async (req: Request, res: Response) => {
     try {
-        let data: any = {};
-
-        // Check if data is in query parameters (simpler for GSM modules)
-        if (Object.keys(req.query).length > 0) {
-            // Convert query params to numbers
-            data = {
-                deviceId: req.query.deviceId as string,
-                ts: req.query.ts ? parseFloat(req.query.ts as string) : undefined,
-                // Phase 1
-                p1_voltage: req.query.p1_voltage ? parseFloat(req.query.p1_voltage as string) : undefined,
-                p1_current: req.query.p1_current ? parseFloat(req.query.p1_current as string) : undefined,
-                p1_power: req.query.p1_power ? parseFloat(req.query.p1_power as string) : undefined,
-                p1_energy_wh: req.query.p1_energy_wh ? parseFloat(req.query.p1_energy_wh as string) : undefined,
-                p1_powerFactor: req.query.p1_powerFactor ? parseFloat(req.query.p1_powerFactor as string) : undefined,
-                // Phase 2
-                p2_voltage: req.query.p2_voltage ? parseFloat(req.query.p2_voltage as string) : undefined,
-                p2_current: req.query.p2_current ? parseFloat(req.query.p2_current as string) : undefined,
-                p2_power: req.query.p2_power ? parseFloat(req.query.p2_power as string) : undefined,
-                p2_energy_wh: req.query.p2_energy_wh ? parseFloat(req.query.p2_energy_wh as string) : undefined,
-                p2_powerFactor: req.query.p2_powerFactor ? parseFloat(req.query.p2_powerFactor as string) : undefined,
-                // Phase 3
-                p3_voltage: req.query.p3_voltage ? parseFloat(req.query.p3_voltage as string) : undefined,
-                p3_current: req.query.p3_current ? parseFloat(req.query.p3_current as string) : undefined,
-                p3_power: req.query.p3_power ? parseFloat(req.query.p3_power as string) : undefined,
-                p3_energy_wh: req.query.p3_energy_wh ? parseFloat(req.query.p3_energy_wh as string) : undefined,
-                p3_powerFactor: req.query.p3_powerFactor ? parseFloat(req.query.p3_powerFactor as string) : undefined,
-                // Totals
-                total_energy_wh: req.query.total_energy_wh ? parseFloat(req.query.total_energy_wh as string) : undefined,
-                total_voltage: req.query.total_voltage ? parseFloat(req.query.total_voltage as string) : undefined,
-                total_current: req.query.total_current ? parseFloat(req.query.total_current as string) : undefined,
-                total_power: req.query.total_power ? parseFloat(req.query.total_power as string) : undefined
-            };
-        } else {
-            // Fall back to JSON body
-            try {
-                data = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-            } catch {
-                return res.status(400).json({ status: 'ERROR', message: 'Invalid JSON' });
-            }
-        }
+        // Map shortened parameter names to full names
+        const data: any = {
+            deviceId: req.query.d as string,
+            ts: req.query.ts ? parseFloat(req.query.ts as string) : undefined,
+            // Phase 1 - shortened names: v1, c1, pf1
+            p1_voltage: req.query.v1 ? parseFloat(req.query.v1 as string) : undefined,
+            p1_current: req.query.c1 ? parseFloat(req.query.c1 as string) : undefined,
+            p1_power: req.query.p1 ? parseFloat(req.query.p1 as string) : undefined,
+            p1_energy_wh: req.query.e1 ? parseFloat(req.query.e1 as string) : undefined,
+            p1_powerFactor: req.query.pf1 ? parseFloat(req.query.pf1 as string) : undefined,
+            // Phase 2 - shortened names: v2, c2, pf2
+            p2_voltage: req.query.v2 ? parseFloat(req.query.v2 as string) : undefined,
+            p2_current: req.query.c2 ? parseFloat(req.query.c2 as string) : undefined,
+            p2_power: req.query.p2 ? parseFloat(req.query.p2 as string) : undefined,
+            p2_energy_wh: req.query.e2 ? parseFloat(req.query.e2 as string) : undefined,
+            p2_powerFactor: req.query.pf2 ? parseFloat(req.query.pf2 as string) : undefined,
+            // Phase 3 - shortened names: v3, c3, pf3
+            p3_voltage: req.query.v3 ? parseFloat(req.query.v3 as string) : undefined,
+            p3_current: req.query.c3 ? parseFloat(req.query.c3 as string) : undefined,
+            p3_power: req.query.p3 ? parseFloat(req.query.p3 as string) : undefined,
+            p3_energy_wh: req.query.e3 ? parseFloat(req.query.e3 as string) : undefined,
+            p3_powerFactor: req.query.pf3 ? parseFloat(req.query.pf3 as string) : undefined,
+            // Totals - shortened names: te, tv, tc, tp
+            total_energy_wh: req.query.te ? parseFloat(req.query.te as string) : undefined,
+            total_voltage: req.query.tv ? parseFloat(req.query.tv as string) : undefined,
+            total_current: req.query.tc ? parseFloat(req.query.tc as string) : undefined,
+            total_power: req.query.tp ? parseFloat(req.query.tp as string) : undefined
+        };
 
         const {
             deviceId,
