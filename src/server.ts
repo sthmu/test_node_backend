@@ -33,6 +33,7 @@ app.get('/', (req: Request, res: Response) => {
             power: 'POST /api/power',
             powerBatch: 'POST /api/power/batch',
             energyMeasurement: 'POST /api/energy-measurement',
+            energyMeasurement3Phase: 'POST /api/energy-measurement-3phase?deviceId=...&p1_voltage=...&p1_current=...&...',
             powerUsage: 'GET /api/power?timeRange=24h',
             powerStats: 'GET /api/power/stats?timeRange=24h',
             powerLatest: 'GET /api/power/latest',
@@ -78,6 +79,7 @@ app.get('/api/health', async (req: Request, res: Response) => {
         { name: 'GSM Logs', method: 'GET', path: '/api/gsm-logs', critical: false },
         { name: 'Power Data', method: 'POST', path: '/api/power', critical: true },
         { name: 'Energy Measurement', method: 'POST', path: '/api/energy-measurement', critical: true },
+        { name: '3-Phase Energy Measurement', method: 'POST', path: '/api/energy-measurement-3phase?deviceId=test&p1_voltage=235&p1_current=2.1&p1_powerFactor=0.95&p2_voltage=234&p2_current=1.8&p2_powerFactor=0.92&p3_voltage=236&p3_current=2.5&p3_powerFactor=0.98', critical: true },
         { name: 'Power Usage', method: 'GET', path: '/api/power?timeRange=1h', critical: true },
         { name: 'Power Latest', method: 'GET', path: '/api/power/latest', critical: false },
         { name: 'Dashboard Readings', method: 'GET', path: '/api/dashboard/readings', critical: false }
@@ -856,6 +858,226 @@ app.post('/api/energy-measurement', async (req: Request, res: Response) => {
         res.status(200).json({ status: 'OK' });
     } catch (error) {
         console.error('Error storing energy measurement:', error);
+        res.status(500).json({ status: 'ERROR', message: 'Server error' });
+    }
+});
+
+// POST endpoint for 3-phase energy measurements
+// Accepts query parameters (for GSM modules sending 3-phase data)
+app.post('/api/energy-measurement-3phase', async (req: Request, res: Response) => {
+    try {
+        let data: any = {};
+
+        // Check if data is in query parameters (simpler for GSM modules)
+        if (Object.keys(req.query).length > 0) {
+            // Convert query params to numbers
+            data = {
+                deviceId: req.query.deviceId as string,
+                ts: req.query.ts ? parseFloat(req.query.ts as string) : undefined,
+                // Phase 1
+                p1_voltage: req.query.p1_voltage ? parseFloat(req.query.p1_voltage as string) : undefined,
+                p1_current: req.query.p1_current ? parseFloat(req.query.p1_current as string) : undefined,
+                p1_power: req.query.p1_power ? parseFloat(req.query.p1_power as string) : undefined,
+                p1_energy_wh: req.query.p1_energy_wh ? parseFloat(req.query.p1_energy_wh as string) : undefined,
+                p1_powerFactor: req.query.p1_powerFactor ? parseFloat(req.query.p1_powerFactor as string) : undefined,
+                // Phase 2
+                p2_voltage: req.query.p2_voltage ? parseFloat(req.query.p2_voltage as string) : undefined,
+                p2_current: req.query.p2_current ? parseFloat(req.query.p2_current as string) : undefined,
+                p2_power: req.query.p2_power ? parseFloat(req.query.p2_power as string) : undefined,
+                p2_energy_wh: req.query.p2_energy_wh ? parseFloat(req.query.p2_energy_wh as string) : undefined,
+                p2_powerFactor: req.query.p2_powerFactor ? parseFloat(req.query.p2_powerFactor as string) : undefined,
+                // Phase 3
+                p3_voltage: req.query.p3_voltage ? parseFloat(req.query.p3_voltage as string) : undefined,
+                p3_current: req.query.p3_current ? parseFloat(req.query.p3_current as string) : undefined,
+                p3_power: req.query.p3_power ? parseFloat(req.query.p3_power as string) : undefined,
+                p3_energy_wh: req.query.p3_energy_wh ? parseFloat(req.query.p3_energy_wh as string) : undefined,
+                p3_powerFactor: req.query.p3_powerFactor ? parseFloat(req.query.p3_powerFactor as string) : undefined,
+                // Totals
+                total_energy_wh: req.query.total_energy_wh ? parseFloat(req.query.total_energy_wh as string) : undefined,
+                total_voltage: req.query.total_voltage ? parseFloat(req.query.total_voltage as string) : undefined,
+                total_current: req.query.total_current ? parseFloat(req.query.total_current as string) : undefined,
+                total_power: req.query.total_power ? parseFloat(req.query.total_power as string) : undefined
+            };
+        } else {
+            // Fall back to JSON body
+            try {
+                data = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+            } catch {
+                return res.status(400).json({ status: 'ERROR', message: 'Invalid JSON' });
+            }
+        }
+
+        const {
+            deviceId,
+            ts,
+            p1_voltage, p1_current, p1_power, p1_energy_wh, p1_powerFactor,
+            p2_voltage, p2_current, p2_power, p2_energy_wh, p2_powerFactor,
+            p3_voltage, p3_current, p3_power, p3_energy_wh, p3_powerFactor,
+            total_energy_wh, total_voltage, total_current, total_power
+        } = data;
+
+        // Validate required deviceId
+        if (!deviceId || typeof deviceId !== 'string') {
+            return res.status(400).json({ status: 'ERROR', message: 'deviceId is required and must be a string' });
+        }
+
+        // Generate missing fields where possible
+        const currentTime = Math.floor(Date.now() / 1000); // Current UNIX timestamp
+
+        // Validate timestamp - must be within last 30 days and not in future
+        const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60);
+        let generatedTs = ts || currentTime;
+
+        // If timestamp is too old or in future, use current server time
+        if (generatedTs < thirtyDaysAgo || generatedTs > currentTime + 300) {
+            console.warn(`Invalid timestamp ${generatedTs} (${new Date(generatedTs * 1000).toISOString()}), using server time`);
+            generatedTs = currentTime;
+        }
+
+        // Assuming 1-minute measurement intervals for calculations
+        const timeIntervalHours = 1 / 60; // 1 minute = 1/60 hour
+
+        // Helper function to generate missing phase data
+        const generatePhaseData = (phase: number, voltage?: number, current?: number, power?: number, energy_wh?: number, powerFactor?: number) => {
+            let genVoltage = voltage;
+            let genCurrent = current;
+            let genPower = power;
+            let genEnergy = energy_wh;
+            let genPf = powerFactor;
+
+            // Generate power factor if missing (default to 0.95 for typical residential)
+            if (genPf === undefined) {
+                genPf = 0.95;
+            }
+
+            // Generate voltage if missing (default to 230V for standard mains)
+            if (genVoltage === undefined) {
+                genVoltage = 230.0;
+            }
+
+            // Priority 1: If we have voltage, current, and power factor, calculate power
+            if (genVoltage !== undefined && genCurrent !== undefined && genPf !== undefined && genPower === undefined) {
+                genPower = genVoltage * genCurrent * genPf;
+            }
+
+            // Priority 2: Generate current if missing but power, voltage are available
+            if (genCurrent === undefined && genPower !== undefined && genVoltage !== undefined && genPf !== undefined) {
+                genCurrent = genPower / (genVoltage * genPf);
+            }
+
+            // Priority 3: Generate power if missing but current and voltage are available
+            if (genPower === undefined && genCurrent !== undefined && genVoltage !== undefined && genPf !== undefined) {
+                genPower = genVoltage * genCurrent * genPf;
+            }
+
+            // Generate energy if missing but power is available
+            if (genEnergy === undefined && genPower !== undefined) {
+                genEnergy = genPower * timeIntervalHours;
+            }
+
+            // Generate power if missing but energy is available
+            if (genPower === undefined && genEnergy !== undefined) {
+                genPower = genEnergy / timeIntervalHours;
+            }
+
+            return {
+                voltage: genVoltage,
+                current: genCurrent,
+                power: genPower,
+                energy_wh: genEnergy,
+                powerFactor: genPf
+            };
+        };
+
+        // Generate data for each phase
+        const phase1Data = generatePhaseData(1, p1_voltage, p1_current, p1_power, p1_energy_wh, p1_powerFactor);
+        const phase2Data = generatePhaseData(2, p2_voltage, p2_current, p2_power, p2_energy_wh, p2_powerFactor);
+        const phase3Data = generatePhaseData(3, p3_voltage, p3_current, p3_power, p3_energy_wh, p3_powerFactor);
+
+        // Generate totals if missing
+        let genTotalEnergy = total_energy_wh;
+        let genTotalVoltage = total_voltage;
+        let genTotalCurrent = total_current;
+        let genTotalPower = total_power;
+
+        // Calculate totals from phases if not provided
+        if (genTotalEnergy === undefined) {
+            genTotalEnergy = (phase1Data.energy_wh || 0) + (phase2Data.energy_wh || 0) + (phase3Data.energy_wh || 0);
+        }
+        if (genTotalPower === undefined) {
+            genTotalPower = (phase1Data.power || 0) + (phase2Data.power || 0) + (phase3Data.power || 0);
+        }
+        if (genTotalCurrent === undefined) {
+            genTotalCurrent = (phase1Data.current || 0) + (phase2Data.current || 0) + (phase3Data.current || 0);
+        }
+        if (genTotalVoltage === undefined) {
+            // For 3-phase systems, total voltage is typically line-to-line voltage
+            genTotalVoltage = Math.sqrt(3) * ((phase1Data.voltage || 230) + (phase2Data.voltage || 230) + (phase3Data.voltage || 230)) / 3;
+        }
+
+        // Validate that we have essential fields for all phases
+        const phasesValid = [phase1Data, phase2Data, phase3Data].every(phase =>
+            phase.voltage !== undefined && phase.current !== undefined &&
+            phase.power !== undefined && phase.energy_wh !== undefined &&
+            phase.powerFactor !== undefined
+        );
+
+        if (!phasesValid || genTotalEnergy === undefined || genTotalPower === undefined ||
+            genTotalCurrent === undefined || genTotalVoltage === undefined) {
+            return res.status(400).json({ status: 'ERROR', message: 'Missing or incomplete 3-phase data' });
+        }
+
+        // Validate power factors
+        const invalidPf = [phase1Data.powerFactor, phase2Data.powerFactor, phase3Data.powerFactor]
+            .some(pf => pf !== undefined && (pf < 0 || pf > 1));
+
+        if (invalidPf) {
+            return res.status(400).json({ status: 'ERROR', message: 'Invalid power factor (must be between 0 and 1)' });
+        }
+
+        if (generatedTs <= 0) {
+            return res.status(400).json({ status: 'ERROR', message: 'Invalid timestamp' });
+        }
+
+        // Create ThreePhaseReadings structure
+        const threePhaseReadings: ThreePhaseReadings = {
+            phases: {
+                "1": {
+                    voltage: phase1Data.voltage!,
+                    current: phase1Data.current!,
+                    power: phase1Data.power!,
+                    energy_wh: phase1Data.energy_wh!,
+                    powerFactor: phase1Data.powerFactor!
+                },
+                "2": {
+                    voltage: phase2Data.voltage!,
+                    current: phase2Data.current!,
+                    power: phase2Data.power!,
+                    energy_wh: phase2Data.energy_wh!,
+                    powerFactor: phase2Data.powerFactor!
+                },
+                "3": {
+                    voltage: phase3Data.voltage!,
+                    current: phase3Data.current!,
+                    power: phase3Data.power!,
+                    energy_wh: phase3Data.energy_wh!,
+                    powerFactor: phase3Data.powerFactor!
+                }
+            },
+            total: {
+                energy_wh: genTotalEnergy,
+                voltage: genTotalVoltage,
+                current: genTotalCurrent,
+                power: genTotalPower
+            },
+            timestamp: new Date(generatedTs * 1000).toISOString()
+        };
+
+        await threePhasePowerService.store3PhaseReading(deviceId, threePhaseReadings);
+
+        res.status(200).json({ status: 'OK' });
+    } catch (error) {
+        console.error('Error storing 3-phase energy measurement:', error);
         res.status(500).json({ status: 'ERROR', message: 'Server error' });
     }
 });
