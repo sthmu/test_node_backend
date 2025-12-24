@@ -116,7 +116,7 @@ class ThreePhasePowerService {
             return {
                 phases: phaseReadings,
                 total: totalData,
-                timestamp: latestTime || new Date().toISOString()
+                timestamp: latestTime ? new Date(latestTime).toISOString() : new Date().toISOString()
             };
         } catch (error) {
             console.error('Error getting latest readings:', error);

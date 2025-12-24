@@ -52,6 +52,7 @@ app.get('/', (req: Request, res: Response) => {
             '8_insights': 'GET /api/dashboard/insights?deviceId=...',
             '9_updateProfile': 'PUT /api/dashboard/user-profile',
             '10_phaseData': 'GET /api/dashboard/phase-data?deviceId=...',
+            '11_latestVoltageCurrent': 'GET /api/latest-voltage-current?deviceId=...',
             
             // Data ingestion
             storeReadings: 'POST /api/dashboard/readings'
@@ -1471,6 +1472,56 @@ app.post('/api/dashboard/readings', async (req: Request, res: Response) => {
                 code: 'SERVER_ERROR',
                 message: 'Failed to store readings'
             }
+        });
+    }
+});
+
+// GET /api/latest-voltage-current - Get latest voltage and current readings
+app.get('/api/latest-voltage-current', validateDeviceId, async (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.query;
+
+        const readings = await threePhasePowerService.getLatestReadings(deviceId as string, [1, 2, 3]);
+
+        if (!readings) {
+            return res.status(200).json({
+                success: false,
+                message: 'No recent voltage and current readings available'
+            });
+        }
+
+        // Extract just voltage and current data
+        const voltageCurrentData = {
+            timestamp: readings.timestamp,
+            phases: {
+                1: readings.phases['1'] ? {
+                    voltage: readings.phases['1'].voltage,
+                    current: readings.phases['1'].current
+                } : null,
+                2: readings.phases['2'] ? {
+                    voltage: readings.phases['2'].voltage,
+                    current: readings.phases['2'].current
+                } : null,
+                3: readings.phases['3'] ? {
+                    voltage: readings.phases['3'].voltage,
+                    current: readings.phases['3'].current
+                } : null
+            },
+            total: {
+                avgVoltage: readings.total.voltage,
+                totalCurrent: readings.total.current
+            }
+        };
+
+        res.status(200).json({
+            success: true,
+            data: voltageCurrentData
+        });
+    } catch (error) {
+        console.error('Error getting latest voltage/current readings:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to retrieve latest voltage and current readings'
         });
     }
 });
