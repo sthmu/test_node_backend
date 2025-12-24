@@ -923,9 +923,6 @@ app.all('/api/energy-measurement-3phase', async (req: Request, res: Response) =>
             generatedTs = currentTime;
         }
 
-        // Assuming 1-minute measurement intervals for calculations
-        const timeIntervalHours = 1 / 60; // 1 minute = 1/60 hour
-
         // Helper function to generate missing phase data
         const generatePhaseData = (phase: number, voltage?: number, current?: number, power?: number, energy_wh?: number, powerFactor?: number) => {
             let genVoltage = voltage;
@@ -944,29 +941,20 @@ app.all('/api/energy-measurement-3phase', async (req: Request, res: Response) =>
                 genVoltage = 230.0;
             }
 
-            // Priority 1: If we have voltage, current, and power factor, calculate power
-            if (genVoltage !== undefined && genCurrent !== undefined && genPf !== undefined && genPower === undefined) {
-                genPower = genVoltage * genCurrent * genPf;
+            // If we have voltage, current, and power factor, calculate power
+            if (genVoltage !== undefined && genCurrent !== undefined && genPf !== undefined) {
+                if (genPower === undefined) {
+                    genPower = genVoltage * genCurrent * genPf;
+                }
+                // Calculate energy from power (assume instantaneous reading, use power as Wh approximation)
+                if (genEnergy === undefined) {
+                    genEnergy = genPower;
+                }
             }
 
-            // Priority 2: Generate current if missing but power, voltage are available
-            if (genCurrent === undefined && genPower !== undefined && genVoltage !== undefined && genPf !== undefined) {
+            // If current is missing but we have voltage and power
+            if (genCurrent === undefined && genPower !== undefined && genVoltage !== undefined && genVoltage > 0 && genPf !== undefined && genPf > 0) {
                 genCurrent = genPower / (genVoltage * genPf);
-            }
-
-            // Priority 3: Generate power if missing but current and voltage are available
-            if (genPower === undefined && genCurrent !== undefined && genVoltage !== undefined && genPf !== undefined) {
-                genPower = genVoltage * genCurrent * genPf;
-            }
-
-            // Generate energy if missing but power is available
-            if (genEnergy === undefined && genPower !== undefined) {
-                genEnergy = genPower * timeIntervalHours;
-            }
-
-            // Generate power if missing but energy is available
-            if (genPower === undefined && genEnergy !== undefined) {
-                genPower = genEnergy / timeIntervalHours;
             }
 
             return {
@@ -1000,8 +988,9 @@ app.all('/api/energy-measurement-3phase', async (req: Request, res: Response) =>
             genTotalCurrent = (phase1Data.current || 0) + (phase2Data.current || 0) + (phase3Data.current || 0);
         }
         if (genTotalVoltage === undefined) {
-            // For 3-phase systems, total voltage is typically line-to-line voltage
-            genTotalVoltage = Math.sqrt(3) * ((phase1Data.voltage || 230) + (phase2Data.voltage || 230) + (phase3Data.voltage || 230)) / 3;
+            // Average voltage across phases
+            const voltages = [phase1Data.voltage, phase2Data.voltage, phase3Data.voltage].filter(v => v !== undefined) as number[];
+            genTotalVoltage = voltages.length > 0 ? voltages.reduce((a, b) => a + b, 0) / voltages.length : 230;
         }
 
         // Validate that we have essential fields for all phases
