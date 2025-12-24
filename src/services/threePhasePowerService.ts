@@ -61,7 +61,6 @@ class ThreePhasePowerService {
                 FROM three_phase_energy
                 WHERE device_id = '${deviceId}'
                   AND phase IN (${phaseCondition})
-                  AND time >= now() - INTERVAL '5 minutes'
                 ORDER BY time DESC
                 LIMIT ${phases.length}
             `;
@@ -91,7 +90,6 @@ class ThreePhasePowerService {
                 SELECT time, total_energy_wh, avg_voltage, total_current, total_power
                 FROM three_phase_total
                 WHERE device_id = '${deviceId}'
-                  AND time >= now() - INTERVAL '5 minutes'
                 ORDER BY time DESC
                 LIMIT 1
             `;
